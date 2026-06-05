@@ -1,5 +1,5 @@
 // ============================================================
-//  8-Wire Cable Tester v3.5 — Arduino Nano + I2C 16x2 LCD
+//  8-Wire Cable Tester v3.6 — Arduino Nano + I2C 16x2 LCD
 //
 //  FIXES vs v3.2:
 //    1. Walsh fault-matrix logic rewritten — idle (both tx and rx
@@ -15,7 +15,7 @@
 //    5. Disconnected wires correctly report "No signal" only —
 //       no false short companions.
 //
-//  WIRING (unchanged from v3.2):
+//  WIRING:
 //    - No external resistors needed
 //    - Uses INPUT_PULLUP throughout (active-low logic)
 //    - TX: D2-D9
@@ -23,18 +23,17 @@
 //    - LCD SDA: A4   SCL: A5
 // ============================================================
 
-#include <SoftwareWire.h>
+#include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-SoftwareWire softwire(A5, 13);
-LiquidCrystal_I2C lcd(0x27, 16, 2, softwire); // try 0x3F if blank
+LiquidCrystal_I2C lcd(0x27, 16, 2); // try 0x3F if blank
 
 // ── Pin assignments ───────────────────────────────────────
 const int TX_PINS[8] = {2, 3, 4, 5, 6, 7, 8, 9};
-const int RX_PINS[8] = {A0, A1, A2, A3, 10, A4, 11, 12};
+const int RX_PINS[8] = {A0, A1, A2, A3, 10, 13, 11, 12};
 
 // Only A0-A3 support analogRead() on the Nano
-const bool RX_HAS_ANALOG[8] = {true, true, true, true, false, true, false, false};
+const bool RX_HAS_ANALOG[8] = {true, true, true, true, false, false, false, false};
 
 // ── Tuning ────────────────────────────────────────────────
 const int   SETTLE_US         = 500;  // raised from 200 — pullups need more recovery time in Walsh
@@ -127,7 +126,7 @@ void setup() {
       passHistory[w][r] = false;
 
   delay(1000);
-  Serial.println(F("Cable Tester v3.5 ready."));
+  Serial.println(F("Cable Tester v3.6 ready."));
   Serial.println(F("No external resistors — INPUT_PULLUP, active-low logic."));
   Serial.print(F("SETTLE_US=")); Serial.print(SETTLE_US);
   Serial.print(F("  TEST_REPEAT=")); Serial.println(TEST_REPEAT);
@@ -390,16 +389,16 @@ void runWalshTest() {
 
   for (int phase = 0; phase < 8; phase++) {
 
-     lcd.clear();
-     lcd.setCursor(0, 0);
-     lcd.print("Walsh ");
-     lcd.print(phase + 1);
-     lcd.print("/8 x");
-     lcd.print(TEST_REPEAT);
-     lcd.setCursor(0, 1);
-     lcd.print("[");
-     for (int b = 0; b < phase * 2; b++) lcd.print("=");
-     lcd.print(">");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Walsh ");
+    lcd.print(phase + 1);
+    lcd.print("/8 x");
+    lcd.print(TEST_REPEAT);
+    lcd.setCursor(0, 1);
+    lcd.print("[");
+    for (int b = 0; b < phase * 2; b++) lcd.print("=");
+    lcd.print(">");
 
     for (int rep = 0; rep < TEST_REPEAT; rep++) {
       for (int p = 0; p < 2; p++) {
@@ -553,92 +552,110 @@ void updateHistory() {
 // ============================================================
 //  LCD DISPLAY
 // ============================================================
-
 void displayResultsLCD() {
-  for (int w = 0; w < 8; w++) {
-    lcd.clear();
 
+  // ── SCREEN 1: Quick summary grid ─────────────────────────
+  // Line 1:  "1 2 3 4 5 6 7 8 "
+  // Line 2:  "P P P F P W P P "  (P/W/F per wire)
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  for (int w = 0; w < 8; w++) {
+    lcd.print(w + 1);
+    lcd.print(" ");
+  }
+  lcd.setCursor(0, 1);
+  for (int w = 0; w < 8; w++) {
+    switch (results[w].severity) {
+      case SEV_PASS: lcd.print("P"); break;
+      case SEV_WARN: lcd.print("W"); break;
+      case SEV_FAIL: lcd.print("F"); break;
+    }
+    lcd.print(" ");
+  }
+  delay(PAUSE_MS);
+
+  // ── SCREEN 2: Overall result + avg delay ─────────────────
+  lcd.clear();
+  int failCount = 0, warnCount = 0;
+  for (int i = 0; i < 8; i++) {
+    if (results[i].severity == SEV_FAIL) failCount++;
+    if (results[i].severity == SEV_WARN) warnCount++;
+  }
+  lcd.setCursor(0, 0);
+  if (failCount == 0 && warnCount == 0) {
+    lcd.print("ALL 8 PASS  :-)");
+  } else {
+    if (failCount > 0) { lcd.print(failCount); lcd.print("xFAIL "); }
+    if (warnCount > 0) { lcd.print(warnCount); lcd.print("xWARN"); }
+  }
+  lcd.setCursor(0, 1);
+  // Avg propagation delay across passing wires
+  float avgDelay = 0; int dCnt = 0;
+  for (int w = 0; w < 8; w++)
+    if (results[w].propagationDelayUs > 0 && results[w].severity == SEV_PASS) {
+      avgDelay += results[w].propagationDelayUs; dCnt++;
+    }
+  if (dCnt > 0) {
+    lcd.print("Avg dly:");
+    lcd.print((int)(avgDelay / dCnt));
+    lcd.print("us");
+  }
+  delay(PAUSE_MS);
+
+  // ── SCREENS 3+: Per-wire detail (2 screens each) ─────────
+  for (int w = 0; w < 8; w++) {
+
+    // ── Detail screen A: status + primary fault ────────────
+    // Line 1: "W1: PASS  1/10"  or  "W1: FAIL  1/10"
+    // Line 2: primary fault description or key measurement
+    lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print("W"); lcd.print(w + 1); lcd.print(":");
+    lcd.print("W"); lcd.print(w + 1); lcd.print(": ");
     switch (results[w].severity) {
       case SEV_PASS: lcd.print("PASS"); break;
       case SEV_WARN: lcd.print("WARN"); break;
       case SEV_FAIL: lcd.print("FAIL"); break;
     }
+    // History in top-right if available
     if (totalRuns > 1) {
       char hist[7];
       snprintf(hist, sizeof(hist), " %d/%d", results[w].passCount, min(totalRuns, HISTORY_DEPTH));
       int col = 16 - strlen(hist);
-      if (col > 6) { lcd.setCursor(col, 0); lcd.print(hist); }
+      if (col > 7) { lcd.setCursor(col, 0); lcd.print(hist); }
     }
 
     lcd.setCursor(0, 1);
-
-    if (results[w].severity == SEV_PASS) {
-      if (results[w].analogValid && results[w].avgVoltageIdle > 0) {
-        lcd.print(results[w].avgVoltageIdle, 2);
-        lcd.print("V ");
-        if (results[w].estimatedResistance >= 0) {
-          lcd.print((int)results[w].estimatedResistance);
-          lcd.print("ohm");
-        }
-      } else {
-        lcd.print("Signal OK");
-        if (results[w].propagationDelayUs > 0) {
-          lcd.print(" ");
-          lcd.print((int)results[w].propagationDelayUs);
-          lcd.print("us");
-        }
-      }
-
-    } else if (results[w].crossTo) {
-      lcd.print("Wired to W");
-      lcd.print(results[w].crossTarget + 1);
-      lcd.print(" instead");
-
-    } else if (results[w].openFault) {
+    if (results[w].openFault) {
       if (results[w].propagationDelayUs < 0)
         lcd.print("No signal-check");
       else
-        lcd.print("Noisy-bad crimp?");
-
+        lcd.print("Noisy/bad crimp?");
+    } else if (results[w].crossTo) {
+      lcd.print("->W"); lcd.print(results[w].crossTarget + 1); lcd.print(" mis-wired");
     } else if (results[w].openFaultReverse) {
-      lcd.print("Asym open-diode?");
-
+      lcd.print("Asym:diode/pin?");
     } else {
       bool printedShort = false;
       for (int r = 0; r < 8; r++) {
         if (results[w].shortWith[r]) {
-          if (!printedShort) {
-            lcd.print("Short to W");
-            lcd.print(r + 1);
-            printedShort = true;
-          } else {
-            lcd.print("+");
-            lcd.print(r + 1);
-          }
+          if (!printedShort) { lcd.print("Short->W"); lcd.print(r+1); printedShort = true; }
+          else               { lcd.print("+"); lcd.print(r+1); }
         }
       }
       if (!printedShort) {
         if (results[w].idleBleed)
           lcd.print("Board leakage!");
         else if (results[w].intermittent)
-          lcd.print("Loose-wiggle it");
-        else if (results[w].analogValid &&
-                 results[w].avgVoltageIdle > 0 &&
-                 results[w].avgVoltageIdle < WARN_V_HIGH_MIN) {
-          lcd.print("Low V:");
-          lcd.print(results[w].avgVoltageIdle, 2);
-          lcd.print("V");
-        } else if (results[w].analogValid &&
-                   results[w].estimatedResistance > WARN_R_MAX) {
-          lcd.print("Hi-R:");
-          lcd.print((int)results[w].estimatedResistance);
-          lcd.print("ohm");
-        } else if (results[w].propagationDelayUs > WARN_DELAY_MAX) {
-          lcd.print("Slow:");
-          lcd.print((int)results[w].propagationDelayUs);
-          lcd.print("us");
+          lcd.print("Intermittent!");
+        else if (results[w].severity == SEV_PASS) {
+          // Show voltage or "Signal OK"
+          if (results[w].analogValid && results[w].avgVoltageIdle > 0) {
+            lcd.print("Idle:");
+            lcd.print(results[w].avgVoltageIdle, 2);
+            lcd.print("V OK");
+          } else {
+            lcd.print("Signal OK");
+          }
         } else {
           int errs = results[w].seqBitErrors + results[w].seqBitErrorsRev;
           if (errs > 0) { lcd.print("Marginal:"); lcd.print(errs); lcd.print("err"); }
@@ -646,19 +663,57 @@ void displayResultsLCD() {
         }
       }
     }
+    delay(PAUSE_MS);
 
+    // ── Detail screen B: measurements ─────────────────────
+    // Line 1: resistance (if available) or bit error counts
+    // Line 2: propagation delay + Walsh bleed
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    if (results[w].analogValid && results[w].estimatedResistance >= 0) {
+      // Display the actual measured contact resistance
+      // Formula: R = 50000 * V_active / (Vcc - V_active)
+      // This is real contact+wire resistance against the 50k pullup
+      lcd.print("R:");
+      lcd.print((int)results[w].estimatedResistance);
+      lcd.print((char)244);  // Ω on HD44780
+      lcd.print(" A:");
+      lcd.print(results[w].avgVoltageActive, 3);
+      lcd.print("V");
+    } else {
+      // Show seq bit errors fwd/rev
+      lcd.print("Err:");
+      lcd.print(results[w].seqBitErrors);
+      lcd.print("f/");
+      lcd.print(results[w].seqBitErrorsRev);
+      lcd.print("r W:");
+      lcd.print(results[w].parBitErrors);
+    }
+
+    lcd.setCursor(0, 1);
+    if (results[w].propagationDelayUs > 0) {
+      lcd.print("Dly:");
+      lcd.print((int)results[w].propagationDelayUs);
+      lcd.print("us");
+    } else {
+      lcd.print("Dly:N/A");
+    }
+    if (results[w].totalBleed > 0) {
+      lcd.print(" Bl:");
+      lcd.print(results[w].totalBleed);
+    } else {
+      lcd.print(" Bl:0");
+    }
     delay(PAUSE_MS);
   }
 }
-
-
 
 // ============================================================
 //  SERIAL REPORT — human readable
 // ============================================================
 void printResultsSerial() {
   Serial.println(F("\n============================================================"));
-  Serial.println(F("  Cable Tester v3.5 — Full Report"));
+  Serial.println(F("  Cable Tester v3.6 — Full Report"));
   Serial.print(F("  Run #")); Serial.print(totalRuns);
   Serial.print(F("  SETTLE_US=")); Serial.print(SETTLE_US);
   Serial.print(F("  TEST_REPEAT=")); Serial.println(TEST_REPEAT);
@@ -832,12 +887,8 @@ void clearFaultMatrix() {
       faultMatrix[tx][rx] = 0;
 }
 
-
 void lcdPrint(const char* line1, const char* line2) {
   lcd.clear();
   lcd.setCursor(0, 0); lcd.print(line1);
   lcd.setCursor(0, 1); lcd.print(line2);
 }
-
-
-void lcdPrint(const char* line1, const char* line2) {}
