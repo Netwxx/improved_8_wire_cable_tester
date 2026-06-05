@@ -23,17 +23,18 @@
 //    - LCD SDA: A4   SCL: A5
 // ============================================================
 
-#include <Wire.h>
+#include <SoftwareWire.h>
 #include <LiquidCrystal_I2C.h>
 
-LiquidCrystal_I2C lcd(0x27, 16, 2); // try 0x3F if blank
+SoftwareWire softwire(A5, 13);
+LiquidCrystal_I2C lcd(0x27, 16, 2, softwire); // try 0x3F if blank
 
 // ── Pin assignments ───────────────────────────────────────
 const int TX_PINS[8] = {2, 3, 4, 5, 6, 7, 8, 9};
-const int RX_PINS[8] = {A0, A1, A2, A3, 10, 13, 11, 12};
+const int RX_PINS[8] = {A0, A1, A2, A3, 10, A4, 11, 12};
 
 // Only A0-A3 support analogRead() on the Nano
-const bool RX_HAS_ANALOG[8] = {true, true, true, true, false, false, false, false};
+const bool RX_HAS_ANALOG[8] = {true, true, true, true, false, true, false, false};
 
 // ── Tuning ────────────────────────────────────────────────
 const int   SETTLE_US         = 500;  // raised from 200 — pullups need more recovery time in Walsh
@@ -389,16 +390,16 @@ void runWalshTest() {
 
   for (int phase = 0; phase < 8; phase++) {
 
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Walsh ");
-    lcd.print(phase + 1);
-    lcd.print("/8 x");
-    lcd.print(TEST_REPEAT);
-    lcd.setCursor(0, 1);
-    lcd.print("[");
-    for (int b = 0; b < phase * 2; b++) lcd.print("=");
-    lcd.print(">");
+     lcd.clear();
+     lcd.setCursor(0, 0);
+     lcd.print("Walsh ");
+     lcd.print(phase + 1);
+     lcd.print("/8 x");
+     lcd.print(TEST_REPEAT);
+     lcd.setCursor(0, 1);
+     lcd.print("[");
+     for (int b = 0; b < phase * 2; b++) lcd.print("=");
+     lcd.print(">");
 
     for (int rep = 0; rep < TEST_REPEAT; rep++) {
       for (int p = 0; p < 2; p++) {
@@ -552,6 +553,7 @@ void updateHistory() {
 // ============================================================
 //  LCD DISPLAY
 // ============================================================
+
 void displayResultsLCD() {
   for (int w = 0; w < 8; w++) {
     lcd.clear();
@@ -648,6 +650,8 @@ void displayResultsLCD() {
     delay(PAUSE_MS);
   }
 }
+
+
 
 // ============================================================
 //  SERIAL REPORT — human readable
@@ -828,8 +832,12 @@ void clearFaultMatrix() {
       faultMatrix[tx][rx] = 0;
 }
 
+
 void lcdPrint(const char* line1, const char* line2) {
   lcd.clear();
   lcd.setCursor(0, 0); lcd.print(line1);
   lcd.setCursor(0, 1); lcd.print(line2);
 }
+
+
+void lcdPrint(const char* line1, const char* line2) {}
